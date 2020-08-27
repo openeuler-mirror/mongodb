@@ -1,8 +1,8 @@
 diff --git a/SConstruct b/SConstruct
-index b1942ea..6dd836d 100644
+index fe7975b..88d6650 100644
 --- a/SConstruct
 +++ b/SConstruct
-@@ -987,6 +987,7 @@ processor_macros = {
+@@ -980,6 +980,7 @@ processor_macros = {
      'arm'     : { 'endian': 'little', 'defines': ('__arm__',) },
      'aarch64' : { 'endian': 'little', 'defines': ('__arm64__', '__aarch64__')},
      'i386'    : { 'endian': 'little', 'defines': ('__i386', '_M_IX86')},
@@ -24,10 +24,10 @@ index 355d70e..afefe7b 100755
  #	undef  vax
  #	undef  mips
 diff --git a/src/third_party/IntelRDFPMathLib20U1/SConscript b/src/third_party/IntelRDFPMathLib20U1/SConscript
-index 56d3649..284aba9 100644
+index 20287a6..a495e9c 100644
 --- a/src/third_party/IntelRDFPMathLib20U1/SConscript
 +++ b/src/third_party/IntelRDFPMathLib20U1/SConscript
-@@ -309,6 +309,9 @@ elif processor == 'x86_64' or processor == 'ppc64le':
+@@ -313,6 +313,9 @@ elif processor == 'x86_64' or processor == 'ppc64le':
      cpp_defines['efi2'] = '1'
      cpp_defines['EFI2'] = '1'
  # Using 64 bit big endian
@@ -37,11 +37,24 @@ index 56d3649..284aba9 100644
  elif processor == 's390x':
      cpp_defines['s390x'] = '1'
      cpp_defines['BID_BIG_ENDIAN'] = '1'
+diff --git a/src/third_party/timelib-2017.05/parse_tz.c b/src/third_party/timelib-2017.05/parse_tz.c
+index 3b68549..6460475 100644
+--- a/src/third_party/timelib-2017.05/parse_tz.c
++++ b/src/third_party/timelib-2017.05/parse_tz.c
+@@ -38,7 +38,7 @@
+ # endif
+ #endif
+ 
+-#if defined(__s390__)
++#if defined(__s390__) || defined(__powerpc64__)
+ # if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+ #  define WORDS_BIGENDIAN
+ # else
 diff --git a/src/third_party/wiredtiger/SConscript b/src/third_party/wiredtiger/SConscript
-index 5d36706..c4f034f 100644
+index 1e07852..8a671b6 100644
 --- a/src/third_party/wiredtiger/SConscript
 +++ b/src/third_party/wiredtiger/SConscript
-@@ -140,7 +140,7 @@ condition_map = {
+@@ -135,7 +135,7 @@ condition_map = {
      'WINDOWS_HOST' : env.TargetOSIs('windows'),
  
      'ARM64_HOST'   : env['TARGET_ARCH'] == 'aarch64',
@@ -50,7 +63,7 @@ index 5d36706..c4f034f 100644
      'X86_HOST'     : env['TARGET_ARCH'] == 'x86_64',
      'ZSERIES_HOST' : env['TARGET_ARCH'] == 's390x',
  }
-@@ -172,6 +172,10 @@ if useSnappy:
+@@ -167,6 +167,10 @@ if useSnappy:
  if not (env['TARGET_ARCH'] == 's390x' and get_option("use-s390x-crc32") == "off"):
      env.Append(CPPDEFINES=["HAVE_CRC32_HARDWARE"])
  

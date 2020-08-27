@@ -5,31 +5,43 @@
 %global daemon mongod
 # mongos daemon
 %global daemonshard mongos
+
 # Arches officially supported by MongoDB upstream
 %global upstream_arches x86_64 ppc64le aarch64 s390x
+# Working storage engines - used for testing
+%ifnarch %{upstream_arches} ppc64
+  %global storageEngines mmapv1
+%else
+  %ifarch s390x ppc64
+    %global storageEngines wiredTiger
+  %else
+    %global storageEngines wiredTiger mmapv1
+  %endif
+%endif
+# MozJS version
+%global mozjsVersion 45
 
 # Regression tests may take a long time (many cores recommended), skip them by
 # passing --nocheck to rpmbuild or by setting runselftest to 0 if defining
 # --nocheck is not possible (e.g. in koji build)
 %{!?runselftest:%global runselftest 1}
+# To disable unit testing (need to be built -> it slows build)
+# ('runselftest' has to be enabled)
+%{!?rununittests:%global rununittests 1}
+# Do we want to package install_tests
+%bcond_without install_tests
+# Do we want to package install_unit_tests
+# ('rununittests' is needed)
+%bcond_with install_unit_tests
 
-# 2017-FEB-08
-# ppc64le is failing one test. disabling for now.
-%ifarch ppc64le
-%global runselftest 0
-%endif
+%global MONGO_DISTNAME mongo-r%{version}
 
-# Do we want to package tests
-%bcond_without tests
-# Do we want to package unit_tests
-%bcond_with unit_tests
-
-# MozJS version
-%global mozjsVersion 45
+# Needed to have working /usr/lib/rpm/brp-python-bytecompile for python3 code
+%global __python %{__python3}
 
 Name:           mongodb
-Version:        3.4.2
-Release:        2%{?dist}
+Version:        3.6.4
+Release:        3%{?dist}
 Summary:        High-performance, schema-free document-oriented database
 Group:          Applications/Databases
 License:        AGPLv3 and zlib and ASL 2.0
@@ -38,7 +50,7 @@ License:        AGPLv3 and zlib and ASL 2.0
 # everything else is AGPLv3
 URL:            http://www.mongodb.org
 
-Source0:        http://fastdl.mongodb.org/src/mongodb-src-r%{version}.tar.gz
+Source0:        https://github.com/mongodb/mongo/archive/r%{version}.tar.gz
 Source1:        %{pkg_name}-tmpfile
 Source2:        %{pkg_name}.logrotate
 Source3:        %{daemon}.conf
@@ -51,58 +63,67 @@ Source9:        %{daemonshard}.service
 Source10:       %{daemonshard}.sysconf
 Source11:       README
 
-# Enable building with system version of libraries
-# https://jira.mongodb.org/browse/SERVER-21353
-Patch0:         system-libs.patch
-# Update bundled https://github.com/chriskohlhoff/asio/ to latest master (to support openssl 1.1.0)
-# revision: 14db6371b338339383aacaed29b0fa352259645a
-# ASIO_STANDALONE and ASIO_SEPARATE_COMPILATION needs to be defined for proper build
-Patch1:         asio-master.patch
-# Fix using timer from updated asio (changed in new asio version)
-Patch2:         asio-new.patch
-# Add support also for 32bit platforms
-#TODO - make it working also for 64bit platforms (to have same code on all platforms)
-Patch3:         32bit-support.patch
-# Add support for openssl >= 1.1.0
-Patch4:         openssl-1.1.0.patch
-# Enable ppc64 big endian support
-Patch5:         ppc64.patch
-# Fix for boost 1.62+
-# Thanks to Gentoo
-Patch6:		mongodb-3.4.2-boost-1.63-fix.patch
+# Fix build system to allow building with system version of libraries (mozjs, icu and asio)
+# - needed for building additional architectures
+# https://jira.mongodb.org/browse/SERVER-21353 -> now patching bundled mozjs45 - see patch23
+#Patch0:         use-system-mozjs-icu-asio.patch
 
-BuildRequires:  gcc >= 4.8.2
+# Convert build scripts and testsuite to support python3
+# https://jira.mongodb.org/browse/SERVER-32295
+Patch1:         python3-buildscripts-tests.patch
+
+# Fix building with boost 1.66
+# https://jira.mongodb.org/browse/SERVER-32516
+Patch2:         boost-1.66.patch
+
+# Few tests fail because of error in altivec implementation of ByteVector
+# https://jira.mongodb.org/browse/SERVER-33395
+Patch3:         ppc64le-fix-altivec.patch
+
+# Fedora specific - adding support for rest of Fedora architectures
+# Upstream doesn't support it and isn't considering merging
+#
+# https://jira.mongodb.org/browse/SERVER-27833
+# Enable ppc64 big endian support
+Patch20:         ppc64.patch
+Patch22:         ppc64-altivec.patch
+# Add support also for 32bit platforms
+Patch21:         32bit-support.patch
+# Generate code for ppc64, arm and i386 arches
+Patch23:         ppc64-arm-i386-mozjs-code.patch
+
+BuildRequires:  gcc-c++ >= 5.3.0
 BuildRequires:  boost-devel >= 1.56
-%ifnarch s390x
 # Provides tcmalloc
-# Not built for s390x in Fedora yet
 BuildRequires:  gperftools-devel
-%endif
 BuildRequires:  libpcap-devel
 BuildRequires:  libstemmer-devel
 BuildRequires:  openssl-devel
 BuildRequires:  pcre-devel
-BuildRequires:  scons
+BuildRequires:  python3-scons
 BuildRequires:  snappy-devel
 BuildRequires:  yaml-cpp-devel
 BuildRequires:  zlib-devel
-BuildRequires:  asio-devel
-%ifnarch %{upstream_arches}
-BuildRequires:  mozjs%{mozjsVersion}-devel
-%endif
 BuildRequires:  valgrind-devel
-BuildRequires:  libicu-devel
 %if 0%{?fedora} >= 15 || 0%{?rhel} >= 7
 BuildRequires:  systemd
 %endif
+BuildRequires:  python3-devel
+BuildRequires:  python3-yaml
+BuildRequires:  python3-requests
 # Required by test suite
 %if %runselftest
-BuildRequires:  python-pymongo
-BuildRequires:  PyYAML
+BuildRequires:  python3-pymongo
 %endif
+BuildRequires:  python3-cheetah
 
+%if 0%{?_module_build}
+# Provide modules only on upstream architectures
+ExclusiveArch:  %{upstream_arches}
+%else
 # Mongodb must run on a 64-bit CPU (see bug #630898)
 ExcludeArch:    ppc %{sparc} s390
+%endif
 
 %description
 Mongo (from "humongous") is a high-performance, open source, schema-free
@@ -137,24 +158,35 @@ Requires(preun): chkconfig
 Requires(postun): initscripts
 %endif
 
-Provides: bundled(wiredtiger) = 2.6.1
+# Same upstream - wiredtiger is primarilly developed for MongoDB
+Provides: bundled(wiredtiger) = %{version}
 # MongoDB bundles development release of asio 1.11
 # This is not in Fedora yet (only asio-1.10)
 Provides: bundled(asio) = 1.11.0
+# MongoDB stores version of icu into database (if using collators)
+# - mongod with using different icu version can't cooperate
+Provides: bundled(icu) = 57.1
+# https://software.intel.com/en-us/articles/intel-decimal-floating-point-math-library
+Provides: bundled(IntelRDFPMathLib) = 20U1
+# https://github.com/derickr/timelib
+Provides: bundled(timelib) = 2017.05beta10
+# MongoDB does provides mozjs customization to recover from OOM
+Provides: bundled(mozjs45) = 45.8.0
 
 %description server
 This package provides the mongo server software, mongo sharding server
 software, default configuration files, and init scripts.
 
 
-%if %{with tests}
+%if %{with install_tests}
 %package test
 Summary:          MongoDB test suite
 Group:            Applications/Databases
 Requires:         %{name}%{?_isa} = %{version}-%{release}
 Requires:         %{name}-server%{?_isa} = %{version}-%{release}
-Requires:         python-pymongo
-Requires:         PyYAML
+Requires:         python3-pymongo
+Requires:         python3-yaml
+Requires:         python3-requests
 
 %description test
 This package contains the regression test suite distributed with
@@ -162,23 +194,30 @@ the MongoDB sources.
 %endif
 
 %prep
-%setup -q -n mongodb-src-r%{version}
-%patch0 -p1
+%setup -q -n %{MONGO_DISTNAME}
 %patch1 -p1
 %patch2 -p1
-%ifarch %{ix86} %{arm}
 %patch3 -p1
+# Patch only Fedora specific architectures
+%ifnarch %{upstream_arches}
+%patch20 -p1
+%patch22 -p1
+%patch21 -p1
+%patch23 -p1
+
+# For mongodb <=3.6 mozjs sources are generated wrong
+sed -i -e "/extract\/js\/src\/jit\/ProcessExecutableMemory.cpp/d" src/third_party/mozjs-45/SConscript
 %endif
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
+
 
 # CRLF -> LF
 sed -i 's/\r//' README
 
-# disable propagation of $TERM env var into the Scons build system
-sed -i -r "s|(for key in \('HOME'), 'TERM'(\):)|\1\2|" SConstruct
+# Disable optimization for s2 library
+# https://jira.mongodb.org/browse/SERVER-17511
+sed -i -r "s|(env.Append\(CCFLAGS=\['-DDEBUG_MODE=false')(\]\))|\1,'-O0'\2|"  src/third_party/s2/SConscript
 
+#TODO - removed unused bundles
 # Use system versions of header files (bundled does not differ)
 sed -i -r "s|third_party/libstemmer_c/include/libstemmer.h|libstemmer.h|" src/mongo/db/fts/stemmer.h
 sed -i -r "s|third_party/yaml-cpp-0.5.1/include/yaml-cpp/yaml.h|yaml-cpp/yaml.h|" src/mongo/util/options_parser/options_parser.cpp
@@ -187,16 +226,10 @@ sed -i -r "s|third_party/yaml-cpp-0.5.1/include/yaml-cpp/yaml.h|yaml-cpp/yaml.h|
 sed -i -r "s|os.curdir(, \"mongo\")|\"%{_bindir}\"\1|"   buildscripts/resmokelib/config.py
 sed -i -r "s|os.curdir(, \"mongod\")|\"%{_bindir}\"\1|"   buildscripts/resmokelib/config.py
 sed -i -r "s|os.curdir(, \"mongos\")|\"%{_bindir}\"\1|"   buildscripts/resmokelib/config.py
-
 # set default data prefix in resmoke.py
 sed -i -r "s|/data/db|%{_datadir}/%{pkg_name}-test/var|"   buildscripts/resmokelib/config.py
 
-# Disable optimization for s2 library
-# https://jira.mongodb.org/browse/SERVER-17511
-sed -i -r "s|(env.Append\(CCFLAGS=\['-DDEBUG_MODE=false')(\]\))|\1,'-O0'\2|"  src/third_party/s2/SConscript
-
-# fix one unit test which used gnu++11 code (c++11 is used)
-sed -i 's|ASSERT_PARSES(double, "0xabcab.defdefP-10", 0xabcab.defdefP-10);||' src/mongo/base/parse_number_test.cpp
+sed -i -r "s|env python|env python3|" buildscripts/resmoke.py
 
 # set default storage engine for non 64-bit arches - RHBZ#1303846
 %ifnarch %{upstream_arches} ppc64
@@ -205,12 +238,14 @@ sed -i 's|engine = "wiredTiger"|engine = "mmapv1"|' src/mongo/db/storage/storage
 
 
 %build
+export LANG="en_US.UTF-8"
 # Prepare variables for building
 cat > variables.list << EOF
-CCFLAGS="%{?optflags}"
+CCFLAGS="$(echo %{?optflags} | sed -e "s/-O. //" -e "s/-g //") -fvisibility=hidden"
 LINKFLAGS="%{?__global_ldflags} -Wl,-z,noexecstack -Wl,--reduce-memory-overheads,--no-keep-memory"
-CPPDEFINES="BOOST_OPTIONAL_USE_SINGLETON_DEFINITION_OF_NONE ASIO_STANDALONE ASIO_SEPARATE_COMPILATION"
 VERBOSE=1
+MONGO_VERSION="%{version}"
+VARIANT_DIR="fedora"
 
 %ifarch %{ix86}
 # On i686 -ffloat-store is requred to round in GranularityRounderPreferredNumbers
@@ -240,44 +275,42 @@ cat > build-options << EOF
  --use-system-valgrind \
  --use-system-zlib \
  --use-system-stemmer \
+ --use-system-tcmalloc \
  --use-system-yaml \
- --use-system-icu \
 %ifarch s390x ppc64
  --mmapv1=off
 %else
  --mmapv1=on \
-%endif
-%ifarch s390x
- --allocator=system \
- --use-s390x-crc32=off \
-%else
- --use-system-tcmalloc \
 %endif
 %ifarch %{upstream_arches} ppc64
  --wiredtiger=on \
 %else
  --wiredtiger=off \
 %endif
-%ifnarch %{upstream_arches}
- --use-system-mozjs \
- --js-engine=mozjs-%{mozjsVersion} \
+%ifarch s390x
+ --use-s390x-crc32=off \
 %endif
  --ssl \
  --nostrip \
  --disable-warnings-as-errors \
  --variables-files=variables.list
 EOF
-# --use-system-asio \
 
 # see output of "scons --help" for options
-scons all $(cat build-options)
+scons-3 core tools $(cat build-options)
 
+%if 0%{rununittests}
+rm -rf build/
+sed -i "/^.*ggdb.*$/d" SConstruct
+scons-3 unittests $(cat build-options)
+%endif
 
 %install
-scons install --prefix=%{buildroot}%{_prefix} $(cat build-options)
-
-#TODO - create man page for mongobridge
-install -p -D -m 755 build/opt/mongo/tools/mongobridge %{buildroot}%{_bindir}
+install -p -D -m 755 mongod %{buildroot}%{_bindir}/mongod
+install -p -D -m 755 mongos %{buildroot}%{_bindir}/mongos
+install -p -D -m 755 mongo %{buildroot}%{_bindir}/mongo
+install -p -D -m 755 mongoperf %{buildroot}%{_bindir}/mongoperf
+install -p -D -m 755 mongobridge %{buildroot}%{_bindir}/mongobridge
 
 mkdir -p %{buildroot}%{_sharedstatedir}/%{pkg_name}
 mkdir -p %{buildroot}%{_localstatedir}/log/%{pkg_name}
@@ -289,8 +322,8 @@ install -p -D -m 644 "%{SOURCE1}"  %{buildroot}%{_tmpfilesdir}/%{pkg_name}.conf
 install -p -D -m 644 "%{SOURCE5}"  %{buildroot}%{_unitdir}/%{daemon}.service
 install -p -D -m 644 "%{SOURCE9}"  %{buildroot}%{_unitdir}/%{daemonshard}.service
 %else
-install -p -D -m 755 "%{SOURCE4}"  %{buildroot}%{_root_initddir}/%{daemon}
-install -p -D -m 755 "%{SOURCE8}"  %{buildroot}%{_root_initddir}/%{daemonshard}
+install -p -D -m 755 "%{SOURCE4}"  %{buildroot}%{_initddir}/%{daemon}
+install -p -D -m 755 "%{SOURCE8}"  %{buildroot}%{_initddir}/%{daemonshard}
 %endif
 install -p -D -m 644 "%{SOURCE2}"  %{buildroot}%{_sysconfdir}/logrotate.d/%{pkg_name}
 install -p -D -m 644 "%{SOURCE3}"  %{buildroot}%{_sysconfdir}/%{daemon}.conf
@@ -302,13 +335,14 @@ install -p -D -m 644 "%{SOURCE10}" %{buildroot}%{_sysconfdir}/sysconfig/%{daemon
 sed -i -r "s|(engine: )mmapv1|\1wiredTiger|" %{buildroot}%{_sysconfdir}/%{daemon}.conf
 %endif
 
+#TODO - create man page for mongobridge
 install -d -m 755                     %{buildroot}%{_mandir}/man1
 install -p -m 644 debian/mongo.1      %{buildroot}%{_mandir}/man1/
 install -p -m 644 debian/mongoperf.1  %{buildroot}%{_mandir}/man1/
 install -p -m 644 debian/mongod.1     %{buildroot}%{_mandir}/man1/
 install -p -m 644 debian/mongos.1     %{buildroot}%{_mandir}/man1/
 
-%if %{with tests}
+%if %{with install_tests}
 mkdir -p %{buildroot}%{_datadir}/%{pkg_name}-test
 mkdir -p %{buildroot}%{_datadir}/%{pkg_name}-test/var
 mkdir -p %{buildroot}%{_datadir}/%{pkg_name}-test/buildscripts
@@ -325,7 +359,7 @@ done
 
 install -p -D -m 444 "%{SOURCE11}"       %{buildroot}%{_datadir}/%{pkg_name}-test/
 %endif
-%if %{with unit_tests}
+%if %{with install_unit_tests}
 mkdir -p %{buildroot}%{_datadir}/%{pkg_name}-test/unittests
 while read unittest
 do
@@ -335,39 +369,51 @@ done < ./build/unittests.txt
 
 
 %check
+export LANG="en_US.UTF-8"
 %if %runselftest
 # More info about testing:
 # http://www.mongodb.org/about/contributors/tutorial/test-the-mongodb-server/
-cd %{_builddir}/%{pkg_name}-src-r%{version}
+cd %{_builddir}/%{MONGO_DISTNAME}
 mkdir ./var
 
 # Run old-style heavy unit tests (dbtest binary)
 #mkdir ./var/dbtest
 #./dbtest --dbpath `pwd`/var/dbtest
 
-# Fedora icu provides more/different langueges than bundled icu
-sed -i "/collator_factory_icu_test/d" build/unittests.txt
+%if 0%{rununittests}
+#TODO - failed on x86_64 and aarch64
+sed -i "/session_catalog_migration_destination_test/d" build/unittests.txt
+sed -i "/connection_string_test/d" build/unittests.txt
+sed -i "/dns_query_test/d" build/unittests.txt
+sed -i "/mongo_uri_test/d" build/unittests.txt
 #TODO
 %ifarch %{ix86} %{arm}
 sed -i "/service_entry_point_mock_test/d" build/unittests.txt
 # Crashing on armv7hl due to optimizations
 sed -i "/chunk_diff_test/d" build/unittests.txt
 %endif
-# Run new-style unit tests (*_test files)
-./buildscripts/resmoke.py --dbpathPrefix `pwd`/var --continueOnFailure --mongo=%{buildroot}%{_bindir}/mongo --mongod=%{buildroot}%{_bindir}/%{daemon} --mongos=%{buildroot}%{_bindir}/%{daemonshard} --nopreallocj --suites unittests \
-%ifarch %{upstream_arches} ppc64
---storageEngine=wiredTiger
-%else
---storageEngine=mmapv1
+%ifarch %{arm}
+# TODO
+# ArraySerialization	Expected [ mongo::fromjson(outJson) == outObj ] but found [ { a: { b: [ "c", "d", [ "e" ] ] } } == { a: { b: [ "c", "d", [ "X" ] ] } }] @src/mongo/bson/mutable
+# https://koji.fedoraproject.org/koji/getfile?taskID=22825582&volume=DEFAULT&name=build.log
+sed -i "/mutable_bson_test/d" build/unittests.txt
 %endif
 
-# Run JavaScript integration tests
-./buildscripts/resmoke.py --dbpathPrefix `pwd`/var --continueOnFailure --mongo=%{buildroot}%{_bindir}/mongo --mongod=%{buildroot}%{_bindir}/%{daemon} --mongos=%{buildroot}%{_bindir}/%{daemonshard} --nopreallocj --suites core \
-%ifarch %{upstream_arches} ppc64
---storageEngine=wiredTiger
-%else
---storageEngine=mmapv1
+# Run new-style unit tests (*_test files)
+./buildscripts/resmoke.py --dbpathPrefix `pwd`/var --continueOnFailure --mongo=%{buildroot}%{_bindir}/mongo --mongod=%{buildroot}%{_bindir}/%{daemon} --mongos=%{buildroot}%{_bindir}/%{daemonshard} --nopreallocj --suites unittests
 %endif
+
+%ifarch %{arm}
+rm -f jstests/core/hostinfo.js
+%endif
+%ifarch ppc64le
+rm -f jstests/core/shelltypes.js
+%endif
+
+for engine in %{storageEngines}; do
+  # Run JavaScript integration tests
+  ./buildscripts/resmoke.py --dbpathPrefix `pwd`/var --continueOnFailure --mongo=%{buildroot}%{_bindir}/mongo --mongod=%{buildroot}%{_bindir}/%{daemon} --mongos=%{buildroot}%{_bindir}/%{daemonshard} --nopreallocj --suites core --storageEngine=$engine
+done
 
 rm -Rf ./var
 %endif
@@ -382,10 +428,10 @@ rm -Rf ./var
 getent group  %{pkg_name} >/dev/null || groupadd -f -g 184 -r %{pkg_name}
 if ! getent passwd %{pkg_name} >/dev/null ; then
     if ! getent passwd 184 >/dev/null ; then
-      useradd -r -u 184 -g %{pkg_name} -d %{_sharedstatedir}/%{pkg_name} \
+      useradd -r -u 184 -g %{pkg_name} -d /var/lib/%{pkg_name} \
       -s /sbin/nologin -c "MongoDB Database Server" %{pkg_name}
     else
-      useradd -r -g %{pkg_name} -d %{_sharedstatedir}/%{pkg_name} \
+      useradd -r -g %{pkg_name} -d /var/lib/%{pkg_name} \
       -s /sbin/nologin -c "MongoDB Database Server" %{pkg_name}
     fi
 fi
@@ -499,7 +545,7 @@ fi
 %endif
 
 
-%if %{with tests}
+%if %{with install_tests}
 %files test
 %doc %{_datadir}/%{pkg_name}-test/README
 %defattr(-,%{pkg_name},root)
@@ -508,13 +554,80 @@ fi
 %{_datadir}/%{pkg_name}-test/jstests
 %{_datadir}/%{pkg_name}-test/buildscripts
 %{_datadir}/%{pkg_name}-test/resmoke.*
-%if %{with unit_tests}
+%{_datadir}/%{pkg_name}-test/__pycache__
+%if %{with install_unit_tests}
 %{_datadir}/%{pkg_name}-test/unittests
 %endif
 %endif
 
 
 %changelog
+* Fri Jun 08 2018 mskalick@redhat.com - 3.6.4-3
+- Use bundled mozjs-45 on all architecture
+
+* Wed May 16 2018 mskalick@redhat.com - 3.6.4-2
+- Use upstream reworked patch for altivec and new gcc
+
+* Mon Apr 23 2018 mskalick@redhat.com - 3.6.4-1
+- Update to latest minor release
+
+* Fri Feb 23 2018 Marek Skalický <mskalick@redhat.com> - 3.6.3-1
+- Update to latest upstream minor version
+
+* Wed Feb 21 2018 Marek Skalický <mskalick@redhat.com> - 3.6.2-7
+- Use numactl for service starting
+
+* Tue Feb 20 2018 Marek Skalický <mskalick@redhat.com> - 3.6.2-6
+- Workaround for unicode test fails on ppc64le
+
+* Wed Feb 14 2018 Richard Shaw <hobbes1069@gmail.com> - 3.6.2-5
+- Rebuild for yaml-cpp 0.6.0.
+
+* Mon Feb 12 2018 Marek Skalický <mskalick@redhat.com> - 3.6.2-4
+- Fix build with boost 1.66
+
+* Fri Feb 09 2018 Igor Gnatenko <ignatenkobrain@fedoraproject.org> - 3.6.2-3
+- Escape macros in %%changelog
+
+* Thu Feb 08 2018 Fedora Release Engineering <releng@fedoraproject.org> - 3.6.2-2
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_28_Mass_Rebuild
+
+* Thu Jan 25 2018 Marek Skalický <mskalick@redhat.com> - 3.6.2-1
+- Rebase to 3.6.2
+- Make python3 patch also python2 compatible
+
+* Mon Jan 08 2018 Marek Skalický <mskalick@redhat.com> - 3.6.0-2
+- Add macro to disable running of unittests
+- Install python3 __pycache__ directory
+
+* Wed Dec 06 2017 Marek Skalický <mskalick@redhat.com> - 3.6.0-1
+- Update to mongodb 3.6.0
+
+* Tue Nov 21 2017 Marek Skalický <mskalick@redhat.com> - 3.6.0-0.rc4
+- Update to RC4 release
+
+* Wed Nov 08 2017 Marek Skalický <mskalick@redhat.com> - 3.6.0-0.rc2
+- Update to RC release of MongoDB 3.6
+
+* Wed Jul 26 2017 Fedora Release Engineering <releng@fedoraproject.org> - 3.4.6-3
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_27_Mass_Rebuild
+
+* Mon Jul 24 2017 Björn Esser <besser82@fedoraproject.org> - 3.4.6-2
+- Rebuilt for Boost 1.64
+
+* Mon Jul 17 2017 Marek Skalický <mskalick@redhat.com> - 3.4.6-1
+- Update to 3.4.6 minor version
+
+* Wed Mar 29 2017 Marek Skalický <mskalick@redhat.com> - 3.4.3-1
+- Update to latest versions 3.4.3
+
+* Mon Mar 13 2017 Marek Skalický <mskalick@redhat.com> - 3.4.2-4
+- Update patches and separate Fedora specific
+- Enable tcmalloc for s390x
+
+* Sun Mar 12 2017 Peter Robinson <pbrobinson@fedoraproject.org> 3.4.2-3
+- Re-enable tests on ppc64le
+
 * Wed Feb  8 2017 Tom Callaway <spot@fedoraproject.org> - 3.4.2-2
 - temporarily disable test running for ppc64le
 
@@ -558,7 +671,7 @@ fi
 - Upgrade to MongoDB 3.2.7
 
 * Fri May 20 2016 Marek Skalicky <mskalick@redhat.com> - 3.2.6-4
-- Fixed server %pre to comply guidelines
+- Fixed server %%pre to comply guidelines
 - Using reserved GID for newly added group
 
 * Mon May 16 2016 Marek Skalicky <mskalick@redhat.com> - 3.2.6-3

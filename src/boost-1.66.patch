@@ -1,0 +1,18 @@
+From 3c34eda8d8a38b982a1659b919e9f4b5971ba512 Mon Sep 17 00:00:00 2001
+From: Judah Schvimer <judah@mongodb.com>
+Date: Wed, 31 Jan 2018 11:38:57 -0500
+Subject: [PATCH] SERVER-32516 remove make_optional type
+
+diff --git a/src/mongo/executor/network_interface_mock_test.cpp b/src/mongo/executor/network_interface_mock_test.cpp
+index b1a2e4edff..c41aad1f8c 100644
+--- a/src/mongo/executor/network_interface_mock_test.cpp
++++ b/src/mongo/executor/network_interface_mock_test.cpp
+@@ -143,7 +143,7 @@ TEST_F(NetworkInterfaceMockTest, ConnectionHook) {
+         [&](const HostAndPort& remoteHost) {
+             makeRequestCalled = true;
+             hostCorrectForRequest = (remoteHost == testHost());
+-            return boost::make_optional<RemoteCommandRequest>(expectedRequest);
++            return boost::make_optional(expectedRequest);
+         },
+         [&](const HostAndPort& remoteHost, RemoteCommandResponse&& response) {
+             handleReplyCalled = true;
